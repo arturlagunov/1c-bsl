@@ -12,17 +12,46 @@ BSL_JAR_DIR="$HOME/.local/lib/bsl-language-server"
 BSL_JAR="$BSL_JAR_DIR/bsl-language-server.jar"
 TEMURIN_ROOT="$HOME/.local/lib/temurin"
 
+ensure_jq() {
+    if command -v jq &>/dev/null; then
+        return 0
+    fi
+    echo "jq not found, installing..."
+    case "$OS" in
+        linux)
+            if command -v apt-get &>/dev/null; then
+                sudo apt-get install -y jq
+            elif command -v dnf &>/dev/null; then
+                sudo dnf install -y jq
+            elif command -v pacman &>/dev/null; then
+                sudo pacman -S --noconfirm jq
+            elif command -v apk &>/dev/null; then
+                sudo apk add jq
+            else
+                echo "ERROR: no known package manager, install jq manually." >&2
+                return 1
+            fi ;;
+        mac)
+            if command -v brew &>/dev/null; then
+                brew install jq
+            elif command -v port &>/dev/null; then
+                sudo port install jq
+            else
+                echo "ERROR: no known package manager, install jq manually." >&2
+                return 1
+            fi ;;
+    esac
+    command -v jq &>/dev/null
+}
+
 bsl_jar_url() {
     local api="https://api.github.com/repos/1c-syntax/bsl-language-server/releases/latest"
-    if command -v python3 &>/dev/null; then
-        local json
-        if json="$(curl -fsSL "$api")" && python3 - "$json" <<'PY'; then
-import json, sys
-
-release = json.loads(sys.argv[1])
-asset = next(a for a in release["assets"] if a["name"].endswith("-exec.jar"))
-print(f'https://github.com/1c-syntax/bsl-language-server/releases/download/{release["tag_name"]}/{asset["name"]}')
-PY
+    local json tag asset
+    if json="$(curl -fsSL "$api")"; then
+        tag="$(printf '%s' "$json" | jq -r '.tag_name')"
+        asset="$(printf '%s' "$json" | jq -r '(.assets // [])[] | select(.name | endswith("-exec.jar")) | .name' 2>/dev/null || true)"
+        if [ -n "$tag" ] && [ -n "$asset" ]; then
+            echo "https://github.com/1c-syntax/bsl-language-server/releases/download/$tag/$asset"
             return
         fi
     fi
@@ -42,47 +71,15 @@ detect_platform() {
     esac
 }
 
-version_python() {
-    python3 - "$BSL_JAR" <<'PY'
-import sys, zipfile
-
-jar = sys.argv[1]
-
-
-def class_version(z, path):
-    try:
-        data = z.read(path)
-    except (KeyError, zipfile.BadZipFile):
-        return None
-    if len(data) < 8 or data[:4] != bytes([0xCA, 0xFE, 0xBA, 0xBE]):
-        return None
-    return (data[6] << 8) | data[7]
-
-
-def manifest_version(z):
-    try:
-        manifest = z.read('META-INF/MANIFEST.MF').decode('utf-8', 'replace')
-    except KeyError:
-        return None
-    for line in manifest.splitlines():
-        if not line.startswith('Build-Jdk-Spec:'):
-            continue
-        try:
-            version = int(line.split(':', 1)[1].strip())
-        except ValueError:
-            return None
-        return version if version >= 17 else None
-    return None
-
-
-z = zipfile.ZipFile(jar)
-path = 'BOOT-INF/classes/com/github/_1c_syntax/bsl/languageserver/MainApplication.class'
-major = class_version(z, path)
-if major is not None and major >= 49:
-    print(major - 44)
-else:
-    print(manifest_version(z) or 21)
-PY
+jar_major() {
+    local path="$1"
+    local hdr bytes hi lo
+    hdr="$(unzip -p "$BSL_JAR" "$path" 2>/dev/null | head -c 4 | od -An -tx1 | tr -d ' \n')"
+    [ "$hdr" = "cafebabe" ] || return 1
+    bytes="$(unzip -p "$BSL_JAR" "$path" 2>/dev/null | head -c 8 | tail -c 2 | od -An -tu1)"
+    read -r hi lo <<< "$bytes"
+    [ -n "$lo" ] || return 1
+    echo $((hi * 256 + lo))
 }
 
 version_manifest() {
@@ -96,16 +93,17 @@ version_manifest() {
 }
 
 required_java() {
-    if command -v python3 &>/dev/null; then
-        version_python
+    if ! command -v unzip &>/dev/null; then
+        echo "ERROR: cannot detect the required Java version: \`unzip\` is required." >&2
+        return 1
+    fi
+    local major
+    major="$(jar_major 'BOOT-INF/classes/com/github/_1c_syntax/bsl/languageserver/MainApplication.class')" || major=""
+    if [ -n "$major" ] && [ "$major" -ge 49 ] 2>/dev/null; then
+        echo $((major - 44))
         return
     fi
-    if command -v unzip &>/dev/null; then
-        version_manifest
-        return
-    fi
-    echo "ERROR: cannot detect the required Java version (need python3 or unzip)." >&2
-    return 1
+    version_manifest
 }
 
 install_jdk() {
@@ -136,35 +134,10 @@ install_jdk() {
 }
 
 strip_comments() {
-    sed '/^[[:space:]]*\/\//d'
+    sed '/^[[:space:]]*\/\//d' "$1"
 }
 
-merge_python() {
-    python3 - "$1" "$2" "$3" <<'PY'
-import json, sys
-
-path, java_path, jar_path = sys.argv[1], sys.argv[2], sys.argv[3]
-try:
-    with open(path, 'r', encoding='utf-8') as f:
-        text = ''.join(line for line in f if not line.lstrip().startswith('//'))
-    data = json.loads(text)
-except (OSError, ValueError):
-    data = {}
-
-data.setdefault('lsp', {}).setdefault('bsl', {})['binary'] = {
-    'path': java_path,
-    'arguments': ['-Xmx4g', '-jar', jar_path],
-}
-bsl = data.setdefault('languages', {}).setdefault('BSL', {})
-bsl['language_servers'] = ['bsl']
-bsl['format_on_save'] = 'off'
-
-json.dump(data, sys.stdout, indent=2, ensure_ascii=False)
-print()
-PY
-}
-
-merge_jq() {
+merge_settings() {
     if [ -f "$1" ]; then
         strip_comments "$1" | jq --arg jp "$2" --arg jr "$3" \
             '.lsp.bsl.binary = {path: $jp, arguments: ["-Xmx4g", "-jar", $jr]}
@@ -177,34 +150,23 @@ merge_jq() {
     fi
 }
 
-settings_json() {
-    local settings="$1" java="$2" jar="$3"
-    if command -v python3 &>/dev/null; then
-        merge_python "$settings" "$java" "$jar"
-    elif command -v jq &>/dev/null; then
-        merge_jq "$settings" "$java" "$jar"
-    fi
-}
-
 write_settings() {
     mkdir -p "$(dirname "$ZED_SETTINGS")"
 
     local merged
-    merged="$(settings_json "$ZED_SETTINGS" "$JAVA_BIN" "$BSL_JAR")"
-    if [ -n "$merged" ]; then
-        printf '%s\n' "$merged" > "$ZED_SETTINGS"
-        echo "Settings updated: $ZED_SETTINGS"
-        return
+    merged="$(merge_settings "$ZED_SETTINGS" "$JAVA_BIN" "$BSL_JAR")"
+    if [ -z "$merged" ]; then
+        echo "ERROR: failed to generate $ZED_SETTINGS." >&2
+        return 1
     fi
-
-    cat << EOF
-NOTE: add the following to $ZED_SETTINGS:
-  "lsp": { "bsl": { "binary": { "path": "$JAVA_BIN", "arguments": ["-Xmx4g", "-jar", "$BSL_JAR"] } } },
-  "languages": { "BSL": { "language_servers": ["bsl"], "format_on_save": "off" } }
-EOF
+    printf '%s\n' "$merged" > "$ZED_SETTINGS"
+    echo "Settings updated: $ZED_SETTINGS"
 }
 
 echo "=== BSL Language Server Extension for Zed ==="
+
+detect_platform
+ensure_jq || exit 1
 
 # Build if extension.wasm missing
 if [ ! -f "$SCRIPT_DIR/extension.wasm" ]; then
@@ -220,7 +182,6 @@ if [ ! -f "$BSL_JAR" ]; then
     echo "Downloaded: $BSL_JAR ($(du -h "$BSL_JAR" | cut -f1))"
 fi
 
-detect_platform
 REQUIRED_JAVA="$(required_java)"
 case "$REQUIRED_JAVA" in
     *[!0-9]* | "") echo "ERROR: could not detect the required Java version." >&2; exit 1 ;;
