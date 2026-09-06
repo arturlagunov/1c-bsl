@@ -16,17 +16,32 @@ bsl-analyzer) built for the WebAssembly Component Model.
 ## Requirements
 
 - **Zed** (Linux/macOS)
-- **Java 17+** (Java 21+ recommended; the exact requirement is detected dynamically from the downloaded jar).
-  Java must be on your `PATH`.
+
+`install.sh` installs a matching Temurin JDK automatically. If you install the extension without the
+script, you need a Java runtime on your `PATH` (17+; the exact requirement is detected dynamically
+from the downloaded jar).
 
 ## Installation
 
-The extension is intended to be published to the Zed extension registry. Until then you can install it
-manually:
+The extension is intended to be published to the Zed extension registry. Until then you can install
+it in one command:
 
 ```bash
 bash install.sh
 ```
+
+The script:
+
+1. builds the extension (`build.sh`) if `extension.wasm` is missing;
+2. downloads the latest `bsl-language-server.jar`;
+3. detects the Java version the jar requires (from the jar's bytecode/manifest) and installs a
+   matching Temurin JDK into `~/.local/lib/temurin/` (cached — re-downloaded only when the required
+   version changes);
+4. wires the local Java and jar into `~/.config/zed/settings.json`
+   (`lsp.bsl.binary` + `languages.BSL`), preserving any existing settings;
+5. copies the extension into Zed.
+
+System Java is ignored: the extension is always launched with the Temurin JDK that matches the jar.
 
 For development you can also use Zed's `Install Dev Extension` on this directory.
 
