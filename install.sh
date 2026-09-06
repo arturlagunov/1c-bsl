@@ -12,46 +12,13 @@ BSL_JAR_DIR="$HOME/.local/lib/bsl-language-server"
 BSL_JAR="$BSL_JAR_DIR/bsl-language-server.jar"
 TEMURIN_ROOT="$HOME/.local/lib/temurin"
 
-ensure_jq() {
-    if command -v jq &>/dev/null; then
-        return 0
-    fi
-    echo "jq not found, installing..."
-    case "$OS" in
-        linux)
-            if command -v apt-get &>/dev/null; then
-                sudo apt-get install -y jq
-            elif command -v dnf &>/dev/null; then
-                sudo dnf install -y jq
-            elif command -v pacman &>/dev/null; then
-                sudo pacman -S --noconfirm jq
-            elif command -v apk &>/dev/null; then
-                sudo apk add jq
-            else
-                echo "ERROR: no known package manager, install jq manually." >&2
-                return 1
-            fi ;;
-        mac)
-            if command -v brew &>/dev/null; then
-                brew install jq
-            elif command -v port &>/dev/null; then
-                sudo port install jq
-            else
-                echo "ERROR: no known package manager, install jq manually." >&2
-                return 1
-            fi ;;
-    esac
-    command -v jq &>/dev/null
-}
-
 bsl_jar_url() {
     local api="https://api.github.com/repos/1c-syntax/bsl-language-server/releases/latest"
-    local json tag asset
+    local json url
     if json="$(curl -fsSL "$api")"; then
-        tag="$(printf '%s' "$json" | jq -r '.tag_name')"
-        asset="$(printf '%s' "$json" | jq -r '(.assets // [])[] | select(.name | endswith("-exec.jar")) | .name' 2>/dev/null || true)"
-        if [ -n "$tag" ] && [ -n "$asset" ]; then
-            echo "https://github.com/1c-syntax/bsl-language-server/releases/download/$tag/$asset"
+        url="$(printf '%s' "$json" | sed -n 's/.*"browser_download_url": *"\([^"]*-exec\.jar\)".*/\1/p' | head -1)"
+        if [ -n "$url" ]; then
+            echo "$url"
             return
         fi
     fi
@@ -138,35 +105,52 @@ strip_comments() {
 }
 
 merge_settings() {
-    if [ -f "$1" ]; then
-        strip_comments "$1" | jq --arg jp "$2" --arg jr "$3" \
-            '.lsp.bsl.binary = {path: $jp, arguments: ["-Xmx4g", "-jar", $jr]}
-             | .languages.BSL.language_servers = ["bsl"]
-             | .languages.BSL.format_on_save = "off"'
-    else
-        jq -n --arg jp "$2" --arg jr "$3" \
-            '{lsp: {bsl: {binary: {path: $jp, arguments: ["-Xmx4g", "-jar", $jr]}}},
-              languages: {BSL: {language_servers: ["bsl"], format_on_save: "off"}}}'
-    fi
+    strip_comments "$1" | jq --arg jp "$2" --arg jr "$3" \
+        '.lsp.bsl.binary = {path: $jp, arguments: ["-Xmx4g", "-jar", $jr]}
+         | .languages.BSL.language_servers = ["bsl"]
+         | .languages.BSL.format_on_save = "off"'
+}
+
+write_fresh_settings() {
+    printf '{\n'
+    printf '  "lsp": {\n    "bsl": {\n      "binary": {\n        "path": "%s",\n' "$JAVA_BIN"
+    printf '        "arguments": ["-Xmx4g", "-jar", "%s"]\n' "$BSL_JAR"
+    printf '      }\n    }\n  },\n'
+    printf '  "languages": {\n    "BSL": {\n      "language_servers": ["bsl"],\n'
+    printf '      "format_on_save": "off"\n    }\n  }\n}\n'
 }
 
 write_settings() {
     mkdir -p "$(dirname "$ZED_SETTINGS")"
 
-    local merged
-    merged="$(merge_settings "$ZED_SETTINGS" "$JAVA_BIN" "$BSL_JAR")"
-    if [ -z "$merged" ]; then
-        echo "ERROR: failed to generate $ZED_SETTINGS." >&2
-        return 1
+    if [ ! -s "$ZED_SETTINGS" ]; then
+        write_fresh_settings > "$ZED_SETTINGS"
+        echo "Settings updated: $ZED_SETTINGS"
+        return
     fi
-    printf '%s\n' "$merged" > "$ZED_SETTINGS"
-    echo "Settings updated: $ZED_SETTINGS"
+
+    if command -v jq &>/dev/null; then
+        local merged
+        merged="$(merge_settings "$ZED_SETTINGS" "$JAVA_BIN" "$BSL_JAR")"
+        if [ -n "$merged" ]; then
+            printf '%s\n' "$merged" > "$ZED_SETTINGS"
+            echo "Settings updated: $ZED_SETTINGS"
+            return
+        fi
+    fi
+
+    cat << EOF
+NOTE: $ZED_SETTINGS already contains your own settings and jq is not
+installed (\`jq\` is not required anywhere else). Add this block to it:
+
+  "lsp": { "bsl": { "binary": { "path": "$JAVA_BIN", "arguments": ["-Xmx4g", "-jar", "$BSL_JAR"] } } },
+  "languages": { "BSL": { "language_servers": ["bsl"], "format_on_save": "off" } }
+EOF
 }
 
 echo "=== BSL Language Server Extension for Zed ==="
 
 detect_platform
-ensure_jq || exit 1
 
 # Build if extension.wasm missing
 if [ ! -f "$SCRIPT_DIR/extension.wasm" ]; then
