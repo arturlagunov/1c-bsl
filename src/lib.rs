@@ -105,45 +105,10 @@ impl BslExtension {
     }
 
     fn existing_jar_path(&self, worktree: &Worktree) -> Result<Option<PathBuf>> {
-        let shell_env = worktree.shell_env();
-
-        if let Some(path) = env_var(&shell_env, "BSL_LANGUAGE_SERVER") {
-            if let Some(path) = self.jar_path_if_exists(path) {
-                return Ok(Some(path));
-            }
-        }
-
-        let mut candidates = Vec::new();
-
-        if let Some(home) = env_var(&shell_env, "HOME") {
-            candidates.push(PathBuf::from(home).join(".local/lib"));
-        }
-        if let Some(data_home) = env_var(&shell_env, "XDG_DATA_HOME") {
-            candidates.push(PathBuf::from(data_home).join("lib"));
-        }
-
-        for base in candidates {
-            let path = base.join(LANGUAGE_SERVER_NAME).join(BSL_JAR_FILENAME);
-            if let Some(path) = self.jar_path_if_exists(path) {
-                return Ok(Some(path));
-            }
-        }
-
-        if let Ok(current_dir) = env::current_dir() {
-            let path = current_dir
-                .join(MANAGED_JAR_DIRECTORY)
-                .join(BSL_JAR_FILENAME);
-            if path.is_file() {
-                return Ok(Some(path));
-            }
-        }
-
-        Ok(None)
-    }
-
-    fn jar_path_if_exists(&self, path: impl AsRef<Path>) -> Option<PathBuf> {
-        let path = path.as_ref();
-        path.is_file().then(|| path.to_path_buf())
+        let extension_dir = env::current_dir().map_err(io_err)?;
+        Ok(potential_jar_paths(&worktree.shell_env(), &extension_dir)
+            .into_iter()
+            .find(|path| path.is_file()))
     }
 
     fn download_latest_jar(
@@ -303,11 +268,47 @@ impl zed::Extension for BslExtension {
 
 zed::register_extension!(BslExtension);
 
-fn env_var(env_vars: &zed::EnvVars, key: &str) -> Option<String> {
+fn env_var(env_vars: &[(String, String)], key: &str) -> Option<String> {
     env_vars
         .iter()
         .find(|(name, _)| name == key)
         .map(|(_, value)| value.clone())
+}
+
+/// Returns the jar paths checked on startup, in priority order: the explicit
+/// `BSL_LANGUAGE_SERVER` path, the default `~/.local/lib` and `$XDG_DATA_HOME`
+/// locations, and finally the previously-downloaded copy in the extension
+/// directory. First existing file wins.
+fn potential_jar_paths(env_vars: &[(String, String)], extension_dir: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    if let Some(path) = env_var(env_vars, "BSL_LANGUAGE_SERVER") {
+        paths.push(PathBuf::from(path));
+    }
+    if let Some(home) = env_var(env_vars, "HOME") {
+        paths.push(
+            PathBuf::from(home)
+                .join(".local/lib")
+                .join(LANGUAGE_SERVER_NAME)
+                .join(BSL_JAR_FILENAME),
+        );
+    }
+    if let Some(data_home) = env_var(env_vars, "XDG_DATA_HOME") {
+        paths.push(
+            PathBuf::from(data_home)
+                .join("lib")
+                .join(LANGUAGE_SERVER_NAME)
+                .join(BSL_JAR_FILENAME),
+        );
+    }
+
+    paths.push(
+        extension_dir
+            .join(MANAGED_JAR_DIRECTORY)
+            .join(BSL_JAR_FILENAME),
+    );
+
+    paths
 }
 
 fn java_not_found_message() -> String {
@@ -550,5 +551,147 @@ mod tests {
 
         let build_jdk_spec = build_jdk_spec(&jar_path).unwrap();
         assert_eq!(build_jdk_spec, Some(21));
+    }
+
+    #[test]
+    fn builds_jar_path_candidates_in_priority_order() {
+        let env_vars = vec![
+            ("BSL_LANGUAGE_SERVER".to_string(), "/explicit.jar".to_string()),
+            ("HOME".to_string(), "/home/test".to_string()),
+            (
+                "XDG_DATA_HOME".to_string(),
+                "/home/test/.data".to_string(),
+            ),
+        ];
+        let extension_dir = Path::new("/ext");
+
+        let paths = potential_jar_paths(&env_vars, extension_dir);
+
+        assert_eq!(paths[0], PathBuf::from("/explicit.jar"));
+        assert_eq!(
+            paths[1],
+            PathBuf::from("/home/test/.local/lib/bsl-language-server/bsl-language-server.jar")
+        );
+        assert_eq!(
+            paths[2],
+            PathBuf::from("/home/test/.data/lib/bsl-language-server/bsl-language-server.jar")
+        );
+        assert_eq!(
+            paths[3],
+            PathBuf::from("/ext/binaries/bsl-language-server.jar")
+        );
+    }
+
+    #[test]
+    fn skips_jars_that_do_not_exist_on_disk() {
+        let base = std::env::temp_dir().join(format!("zed-bsl-test-{}", std::process::id()));
+        let extension_dir = base.join("ext");
+        fs::create_dir_all(extension_dir.join(MANAGED_JAR_DIRECTORY)).unwrap();
+        fs::write(extension_dir.join(MANAGED_JAR_DIRECTORY).join(BSL_JAR_FILENAME), b"fake jar")
+            .unwrap();
+
+        let env_vars = vec![
+            ("BSL_LANGUAGE_SERVER".to_string(), "/does/not/exist.jar".to_string()),
+            ("HOME".to_string(), base.join("missing-home").to_string_lossy().into_owned()),
+        ];
+
+        let paths = potential_jar_paths(&env_vars, &extension_dir);
+        assert_eq!(paths[0].is_file(), false, "nonexistent env jar must be skipped");
+        assert_eq!(paths[1].is_file(), false, "nonexistent home jar must be skipped");
+        assert!(paths[2].is_file(), "managed jar in extension dir must be found");
+
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn parses_real_java_version_probe_output() {
+        let output = std::process::Command::new("java")
+            .args(["-XshowSettings:properties", "-version"])
+            .output();
+        let Ok(output) = output else {
+            return;
+        };
+        let text = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stderr),
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let version = text
+            .lines()
+            .find_map(|line| {
+                if line.contains("java.specification.version") {
+                    line.split('=').nth(1).map(str::trim).and_then(parse_java_spec_version)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| panic!("no parseable java.specification.version in:\n{}", text));
+
+        assert!(version >= 17, "installed Java ({}) must be at least 17", version);
+    }
+
+    #[test]
+    fn accepts_java_version_required_by_local_jar() {
+        let jar_path = PathBuf::from(env!("HOME"))
+            .join(".local/lib/bsl-language-server/bsl-language-server.jar");
+        if !jar_path.is_file() {
+            return;
+        }
+
+        let probe = std::process::Command::new("java")
+            .args(["-XshowSettings:properties", "-version"])
+            .output()
+            .expect("run java");
+        let text = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&probe.stderr),
+            String::from_utf8_lossy(&probe.stdout)
+        );
+        let installed = text
+            .lines()
+            .find_map(|line| {
+                if line.contains("java.specification.version") {
+                    line.split('=').nth(1).map(str::trim).and_then(parse_java_spec_version)
+                } else {
+                    None
+                }
+            })
+            .expect("parse installed java version");
+        let required = bytecode_major_version(&jar_path)
+            .unwrap()
+            .map(class_file_version)
+            .unwrap();
+        assert!(
+            installed >= required,
+            "installed Java {} is too old for the jar (requires {}); \
+             the extension would refuse to start",
+            installed,
+            required
+        );
+    }
+
+    #[test]
+    fn local_jar_starts_with_installed_java() {
+        let jar_path = PathBuf::from(env!("HOME"))
+            .join(".local/lib/bsl-language-server/bsl-language-server.jar");
+        if !jar_path.is_file() {
+            return;
+        }
+
+        let output = std::process::Command::new("java")
+            .arg("-jar")
+            .arg(&jar_path)
+            .arg("--version")
+            .output()
+            .expect("failed to run java -jar --version");
+
+        assert!(
+            output.status.success(),
+            "jar did not start with the installed Java: {}\n{}",
+            String::from_utf8_lossy(&output.stderr),
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("version"), "expected version output, got: {}", stdout);
     }
 }
