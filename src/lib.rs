@@ -23,6 +23,9 @@ use jar::BslJar;
 use java::JavaRuntime;
 use paths::JarRegistry;
 
+#[cfg(test)]
+mod tests;
+
 pub struct BslExtension {
     java_runtime: Option<JavaRuntime>,
 }
