@@ -2,10 +2,11 @@ mod config;
 mod constants;
 mod download;
 mod jar;
-mod java;
 mod paths;
 mod shell_env;
 mod status;
+mod version;
+mod java;
 mod zip;
 
 use std::env;

@@ -21,6 +21,9 @@ bsl-analyzer) built for the WebAssembly Component Model.
 script, you need a Java runtime on your `PATH` (17+; the exact requirement is detected dynamically
 from the downloaded jar).
 
+`install.sh` only requires `cargo` (a Rust toolchain); if missing it bootstraps `rustup` via `curl`
+and builds the installer from source in Rust — no `python`, `jq`, `unzip` or `curl`-downloads by hand.
+
 ## Installation
 
 The extension is intended to be published to the Zed extension registry. Until then you can install
@@ -30,13 +33,14 @@ it in one command:
 bash install.sh
 ```
 
-The script:
+`install.sh` is a thin launcher that builds and runs a native Rust installer (`cargo run --bin installer`),
+which:
 
 1. builds the extension (`build.sh`) if `extension.wasm` is missing;
 2. downloads the latest `bsl-language-server.jar`;
-3. detects the Java version the jar requires (from the jar's bytecode/manifest) and installs a
-   matching Temurin JDK into `~/.local/lib/temurin/` (cached — re-downloaded only when the required
-   version changes);
+3. detects the Java version the jar requires (from the jar's bytecode/manifest, using the exact same
+   [`BslJar`](src/jar.rs) logic the WASM extension uses) and installs a matching Temurin JDK into
+   `~/.local/lib/temurin/` (cached — re-downloaded only when the required version changes);
 4. wires the local Java and jar into `~/.config/zed/settings.json`
    (`lsp.bsl.binary` + `languages.BSL`), preserving any existing settings;
 5. copies the extension into Zed.

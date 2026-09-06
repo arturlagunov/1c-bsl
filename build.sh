@@ -22,7 +22,7 @@ fi
 
 echo "Building WASM component..."
 cd "$SCRIPT_DIR"
-cargo build --target "$WASM_TARGET" --release
+cargo build --target "$WASM_TARGET" --release --lib
 
 cp "target/$WASM_TARGET/release/zed_1c_bsl.wasm" extension.wasm
 echo "Built: extension.wasm ($(stat -c%s extension.wasm | numfmt --to=iec-i))"

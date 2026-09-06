@@ -37,7 +37,7 @@ impl JavaRuntime {
             String::from_utf8_lossy(&output.stdout)
         );
 
-        let version = parse_output(&probe).ok_or_else(|| {
+        let version = crate::version::parse_output(&probe).ok_or_else(|| {
             format!(
                 "failed to determine the installed Java version from `java` at {}",
                 self.path
@@ -57,24 +57,4 @@ impl JavaRuntime {
             LANGUAGE_SERVER_NAME
         )
     }
-}
-
-pub(crate) fn parse_output(probe: &str) -> Option<u32> {
-    probe.lines().find_map(|line| {
-        if line.contains("java.specification.version") {
-            line.split('=').nth(1).map(str::trim).and_then(parse_version)
-        } else {
-            None
-        }
-    })
-}
-
-/// Parses a `java.specification.version` value such as `21`, `17.0.1` or the
-/// legacy `1.8` into an integer Java version (8, 17, 21, ...).
-pub(crate) fn parse_version(value: &str) -> Option<u32> {
-    let value = value.trim();
-    if let Some(value) = value.strip_prefix("1.") {
-        return value.split('.').next().and_then(|part| part.parse().ok());
-    }
-    value.split('.').next().and_then(|part| part.parse().ok())
 }

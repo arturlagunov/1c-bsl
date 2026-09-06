@@ -1,4 +1,4 @@
-use crate::java::{parse_output, parse_version};
+use crate::version::{parse_output, parse_version};
 
 #[test]
 fn parses_versions() {
