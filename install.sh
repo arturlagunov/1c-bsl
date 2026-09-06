@@ -19,7 +19,8 @@ if [ ! -f "$SCRIPT_DIR/extension.wasm" ]; then
     bash "$SCRIPT_DIR/build.sh"
 fi
 
-# Download BSL Language Server JAR
+# Download BSL Language Server JAR (optional - the extension can download it automatically)
+# Kept so an existing jar at the well-known location is reused instead of re-downloaded.
 if [ ! -f "$BSL_JAR" ]; then
     echo "Downloading BSL Language Server..."
     mkdir -p "$BSL_JAR_DIR"
