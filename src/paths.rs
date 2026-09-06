@@ -76,7 +76,7 @@ mod tests {
     }
 
     #[test]
-    fn builds_candidates_in_priority_order() {
+    fn priority_order() {
         let registry =
             JarRegistry::new(&env("/home/test", "/home/test/.data"), Path::new("/ext"));
 
@@ -101,7 +101,7 @@ mod tests {
     }
 
     #[test]
-    fn skips_candidates_missing_on_disk() {
+    fn skips_missing() {
         let base =
             std::env::temp_dir().join(format!("zed-bsl-paths-test-{}", std::process::id()));
         let extension_dir = base.join("ext");

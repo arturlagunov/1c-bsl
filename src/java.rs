@@ -84,7 +84,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_java_specification_versions() {
+    fn parses_versions() {
         assert_eq!(parse_version("21"), Some(21));
         assert_eq!(parse_version("21.0.2"), Some(21));
         assert_eq!(parse_version("17.0.1"), Some(17));
@@ -94,7 +94,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_real_java_probe_output() {
+    fn parses_real_output() {
         let output = std::process::Command::new("java")
             .args(["-XshowSettings:properties", "-version"])
             .output();

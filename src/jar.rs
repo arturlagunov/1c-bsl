@@ -69,7 +69,7 @@ mod tests {
     }
 
     #[test]
-    fn reads_required_java_version_from_local_jar() {
+    fn detects_version() {
         let jar = local_jar();
         if !jar.is_file() {
             return;
@@ -80,7 +80,7 @@ mod tests {
     }
 
     #[test]
-    fn installed_java_matches_required_version() {
+    fn version_matches() {
         let jar = local_jar();
         if !jar.is_file() {
             return;
@@ -90,7 +90,7 @@ mod tests {
             .java_version()
             .unwrap()
             .unwrap_or(MINIMUM_REQUIRED_JAVA);
-        let installed = installed_java_version();
+        let installed = installed_version();
 
         assert!(
             installed >= required,
@@ -102,7 +102,7 @@ mod tests {
     }
 
     #[test]
-    fn local_jar_launches_with_installed_java() {
+    fn jar_launches() {
         let jar = local_jar();
         if !jar.is_file() {
             return;
@@ -127,7 +127,7 @@ mod tests {
         );
     }
 
-    fn installed_java_version() -> u32 {
+    fn installed_version() -> u32 {
         let output = std::process::Command::new("java")
             .args(["-XshowSettings:properties", "-version"])
             .output()
