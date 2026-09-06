@@ -26,17 +26,14 @@ detect_platform() {
     esac
 }
 
-required_java() {
-    if command -v python3 &>/dev/null; then
-        python3 - "$BSL_JAR" <<'PY'
+version_python() {
+    python3 - "$BSL_JAR" <<'PY'
 import sys, zipfile
 
 jar = sys.argv[1]
-z = zipfile.ZipFile(jar)
 
 
-def main_class():
-    path = 'BOOT-INF/classes/com/github/_1c_syntax/bsl/languageserver/MainApplication.class'
+def class_version(z, path):
     try:
         data = z.read(path)
     except (KeyError, zipfile.BadZipFile):
@@ -46,41 +43,53 @@ def main_class():
     return (data[6] << 8) | data[7]
 
 
-major = main_class()
-if major is not None and major >= 49:
-    print(major - 44)
-else:
+def manifest_version(z):
     try:
         manifest = z.read('META-INF/MANIFEST.MF').decode('utf-8', 'replace')
     except KeyError:
-        manifest = ''
-    version = None
+        return None
     for line in manifest.splitlines():
-        if line.startswith('Build-Jdk-Spec:'):
-            try:
-                parsed = int(line.split(':', 1)[1].strip())
-            except ValueError:
-                parsed = None
-            if parsed is not None and parsed >= 17:
-                version = parsed
-            break
-    print(version if version else 21)
+        if not line.startswith('Build-Jdk-Spec:'):
+            continue
+        try:
+            version = int(line.split(':', 1)[1].strip())
+        except ValueError:
+            return None
+        return version if version >= 17 else None
+    return None
+
+
+z = zipfile.ZipFile(jar)
+path = 'BOOT-INF/classes/com/github/_1c_syntax/bsl/languageserver/MainApplication.class'
+major = class_version(z, path)
+if major is not None and major >= 49:
+    print(major - 44)
+else:
+    print(manifest_version(z) or 21)
 PY
+}
+
+version_manifest() {
+    local version
+    version=$(unzip -p "$BSL_JAR" META-INF/MANIFEST.MF 2>/dev/null |
+        sed -n 's/^Build-Jdk-Spec:[[:space:]]*//p' | head -1)
+    if [ -n "$version" ] && [ "$version" -lt 17 ] 2>/dev/null; then
+        version=""
+    fi
+    echo "${version:-21}"
+}
+
+required_java() {
+    if command -v python3 &>/dev/null; then
+        version_python
         return
     fi
-
     if command -v unzip &>/dev/null; then
-        version=$(unzip -p "$BSL_JAR" META-INF/MANIFEST.MF 2>/dev/null |
-            sed -n 's/^Build-Jdk-Spec:[[:space:]]*//p' | head -1)
-        if [ -n "$version" ] && [ "$version" -lt 17 ] 2>/dev/null; then
-            version=""
-        fi
-        echo "${version:-21}"
+        version_manifest
         return
     fi
-
     echo "ERROR: cannot detect the required Java version (need python3 or unzip)." >&2
-    exit 1
+    return 1
 }
 
 install_jdk() {
@@ -110,11 +119,8 @@ install_jdk() {
     echo "Temurin JDK $major installed at $jdk"
 }
 
-write_settings() {
-    mkdir -p "$(dirname "$ZED_SETTINGS")"
-
-    if command -v python3 &>/dev/null; then
-        if python3 - "$ZED_SETTINGS" "$JAVA_BIN" "$BSL_JAR" <<'PY' && echo "Settings updated: $ZED_SETTINGS"
+merge_python() {
+    python3 - "$1" "$2" "$3" <<'PY'
 import json, sys
 
 path, java_path, jar_path = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -132,29 +138,41 @@ bsl = data.setdefault('languages', {}).setdefault('BSL', {})
 bsl['language_servers'] = ['bsl']
 bsl['format_on_save'] = 'off'
 
-with open(path, 'w', encoding='utf-8') as f:
-    json.dump(data, f, indent=2, ensure_ascii=False)
-    f.write('\n')
+json.dump(data, sys.stdout, indent=2, ensure_ascii=False)
+print()
 PY
-        then
-            return
-        fi
-    fi
+}
 
-    if command -v jq &>/dev/null; then
-        local tmp="$ZED_SETTINGS.tmp"
-        if [ -f "$ZED_SETTINGS" ]; then
-            jq --arg jp "$JAVA_BIN" --arg jr "$BSL_JAR" \
-                '.lsp.bsl.binary = {path: $jp, arguments: ["-Xmx4g", "-jar", $jr]}
-                 | .languages.BSL.language_servers = ["bsl"]
-                 | .languages.BSL.format_on_save = "off"' \
-                "$ZED_SETTINGS" > "$tmp"
-        else
-            jq -n --arg jp "$JAVA_BIN" --arg jr "$BSL_JAR" \
-                '{lsp: {bsl: {binary: {path: $jp, arguments: ["-Xmx4g", "-jar", $jr]}}},
-                  languages: {BSL: {language_servers: ["bsl"], format_on_save: "off"}}}' > "$tmp"
-        fi
-        mv "$tmp" "$ZED_SETTINGS"
+merge_jq() {
+    if [ -f "$1" ]; then
+        jq --arg jp "$2" --arg jr "$3" \
+            '.lsp.bsl.binary = {path: $jp, arguments: ["-Xmx4g", "-jar", $jr]}
+             | .languages.BSL.language_servers = ["bsl"]
+             | .languages.BSL.format_on_save = "off"' \
+            "$1"
+    else
+        jq -n --arg jp "$2" --arg jr "$3" \
+            '{lsp: {bsl: {binary: {path: $jp, arguments: ["-Xmx4g", "-jar", $jr]}}},
+              languages: {BSL: {language_servers: ["bsl"], format_on_save: "off"}}}'
+    fi
+}
+
+settings_json() {
+    local settings="$1" java="$2" jar="$3"
+    if command -v python3 &>/dev/null; then
+        merge_python "$settings" "$java" "$jar"
+    elif command -v jq &>/dev/null; then
+        merge_jq "$settings" "$java" "$jar"
+    fi
+}
+
+write_settings() {
+    mkdir -p "$(dirname "$ZED_SETTINGS")"
+
+    local merged
+    merged="$(settings_json "$ZED_SETTINGS" "$JAVA_BIN" "$BSL_JAR")"
+    if [ -n "$merged" ]; then
+        printf '%s\n' "$merged" > "$ZED_SETTINGS"
         echo "Settings updated: $ZED_SETTINGS"
         return
     fi
