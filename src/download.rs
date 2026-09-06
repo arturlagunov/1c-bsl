@@ -32,9 +32,10 @@ impl BslJarDownloader {
             .assets
             .iter()
             .find(|asset| asset.name == JAR_FILENAME)
+            .or_else(|| release.assets.iter().find(|asset| asset.name.ends_with("-exec.jar")))
             .ok_or_else(|| {
                 format!(
-                    "no `{}` asset found in release {} of {}",
+                    "no `{}` or `*-exec.jar` asset found in release {} of {}",
                     JAR_FILENAME, release.version, BSL_REPOSITORY
                 )
             })?;

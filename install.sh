@@ -8,10 +8,26 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ZED_EXT_DIR="$HOME/.local/share/zed/extensions/installed/1c-bsl"
 ZED_SETTINGS="$HOME/.config/zed/settings.json"
-BSL_JAR_URL="https://github.com/1c-syntax/bsl-language-server/releases/latest/download/bsl-language-server.jar"
 BSL_JAR_DIR="$HOME/.local/lib/bsl-language-server"
 BSL_JAR="$BSL_JAR_DIR/bsl-language-server.jar"
 TEMURIN_ROOT="$HOME/.local/lib/temurin"
+
+bsl_jar_url() {
+    local api="https://api.github.com/repos/1c-syntax/bsl-language-server/releases/latest"
+    if command -v python3 &>/dev/null; then
+        local json
+        if json="$(curl -fsSL "$api")" && python3 - "$json" <<'PY'; then
+import json, sys
+
+release = json.loads(sys.argv[1])
+asset = next(a for a in release["assets"] if a["name"].endswith("-exec.jar"))
+print(f'https://github.com/1c-syntax/bsl-language-server/releases/download/{release["tag_name"]}/{asset["name"]}')
+PY
+            return
+        fi
+    fi
+    echo "https://github.com/1c-syntax/bsl-language-server/releases/latest/download/bsl-language-server.jar"
+}
 
 detect_platform() {
     case "$(uname -s)" in
@@ -119,6 +135,10 @@ install_jdk() {
     echo "Temurin JDK $major installed at $jdk"
 }
 
+strip_comments() {
+    sed '/^[[:space:]]*\/\//d'
+}
+
 merge_python() {
     python3 - "$1" "$2" "$3" <<'PY'
 import json, sys
@@ -126,7 +146,8 @@ import json, sys
 path, java_path, jar_path = sys.argv[1], sys.argv[2], sys.argv[3]
 try:
     with open(path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
+        text = ''.join(line for line in f if not line.lstrip().startswith('//'))
+    data = json.loads(text)
 except (OSError, ValueError):
     data = {}
 
@@ -145,11 +166,10 @@ PY
 
 merge_jq() {
     if [ -f "$1" ]; then
-        jq --arg jp "$2" --arg jr "$3" \
+        strip_comments "$1" | jq --arg jp "$2" --arg jr "$3" \
             '.lsp.bsl.binary = {path: $jp, arguments: ["-Xmx4g", "-jar", $jr]}
              | .languages.BSL.language_servers = ["bsl"]
-             | .languages.BSL.format_on_save = "off"' \
-            "$1"
+             | .languages.BSL.format_on_save = "off"'
     else
         jq -n --arg jp "$2" --arg jr "$3" \
             '{lsp: {bsl: {binary: {path: $jp, arguments: ["-Xmx4g", "-jar", $jr]}}},
@@ -196,7 +216,7 @@ fi
 if [ ! -f "$BSL_JAR" ]; then
     echo "Downloading BSL Language Server..."
     mkdir -p "$BSL_JAR_DIR"
-    curl -fSL "$BSL_JAR_URL" -o "$BSL_JAR"
+    curl -fSL "$(bsl_jar_url)" -o "$BSL_JAR"
     echo "Downloaded: $BSL_JAR ($(du -h "$BSL_JAR" | cut -f1))"
 fi
 
