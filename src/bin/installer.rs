@@ -13,7 +13,7 @@ use tar::Archive as TarArchive;
 
 #[path = "../constants.rs"]
 mod constants;
-#[path = "../zip.rs"]
+#[path = "../zip/mod.rs"]
 mod zip;
 #[path = "../jar.rs"]
 mod jar;
