@@ -6,7 +6,7 @@ use zed_extension_api::{
 };
 
 use crate::constants::{BSL_REPOSITORY, JAR_FILENAME};
-use crate::status;
+use crate::status::Status;
 
 /// Downloads the latest release of the BSL language server.
 pub struct BslJarDownloader;
@@ -18,7 +18,8 @@ impl BslJarDownloader {
         language_server_id: &LanguageServerId,
         destination: &Path,
     ) -> zed::Result<()> {
-        status::checking_update(language_server_id);
+        let status = Status::new(language_server_id);
+        status.checking_update();
 
         let release = zed::latest_github_release(
             BSL_REPOSITORY,
@@ -46,7 +47,7 @@ impl BslJarDownloader {
             })?;
         }
 
-        status::downloading(language_server_id);
+        status.downloading();
 
         zed::download_file(
             &asset.download_url,
@@ -54,7 +55,7 @@ impl BslJarDownloader {
             DownloadedFileType::Uncompressed,
         )
         .map_err(|error| {
-            status::failed(language_server_id, &format!("Failed to download {}: {}", JAR_FILENAME, error));
+            status.failed(&format!("Failed to download {}: {}", JAR_FILENAME, error));
             format!("failed to download {}: {}", JAR_FILENAME, error)
         })?;
 

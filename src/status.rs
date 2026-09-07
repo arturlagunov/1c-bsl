@@ -1,22 +1,27 @@
 use zed_extension_api::{LanguageServerId, LanguageServerInstallationStatus};
 
-pub fn checking_update(language_server_id: &LanguageServerId) {
-    zed_extension_api::set_language_server_installation_status(
-        language_server_id,
-        &LanguageServerInstallationStatus::CheckingForUpdate,
-    );
+pub struct Status<'a> {
+    id: &'a LanguageServerId,
 }
 
-pub fn downloading(language_server_id: &LanguageServerId) {
-    zed_extension_api::set_language_server_installation_status(
-        language_server_id,
-        &LanguageServerInstallationStatus::Downloading,
-    );
-}
+impl<'a> Status<'a> {
+    pub fn new(id: &'a LanguageServerId) -> Self {
+        Self { id }
+    }
 
-pub fn failed(language_server_id: &LanguageServerId, message: &str) {
-    zed_extension_api::set_language_server_installation_status(
-        language_server_id,
-        &LanguageServerInstallationStatus::Failed(message.to_string()),
-    );
+    pub fn checking_update(&self) {
+        self.set(LanguageServerInstallationStatus::CheckingForUpdate);
+    }
+
+    pub fn downloading(&self) {
+        self.set(LanguageServerInstallationStatus::Downloading);
+    }
+
+    pub fn failed(&self, message: &str) {
+        self.set(LanguageServerInstallationStatus::Failed(message.to_string()));
+    }
+
+    fn set(&self, status: LanguageServerInstallationStatus) {
+        zed_extension_api::set_language_server_installation_status(self.id, &status);
+    }
 }

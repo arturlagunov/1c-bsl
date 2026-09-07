@@ -23,6 +23,7 @@ use download::BslJarDownloader;
 use jar::BslJar;
 use java::JavaRuntime;
 use paths::JarRegistry;
+use status::Status;
 
 #[cfg(test)]
 mod tests;
@@ -63,25 +64,21 @@ impl BslExtension {
             }
         };
 
+        let status = Status::new(language_server_id);
         let required_version = match BslJar::new(&jar).java_version()? {
             Some(version) => version,
             None => {
-                status::failed(
-                    language_server_id,
-                    "Failed to determine the required Java version from the downloaded jar",
-                );
+                status
+                    .failed("Failed to determine the required Java version from the downloaded jar");
                 MINIMUM_REQUIRED_JAVA
             }
         };
 
         let installed_version = runtime.version().map_err(|error| {
-            status::failed(
-                language_server_id,
-                &format!(
-                    "Failed to determine the installed Java version from `{}`",
-                    java_path
-                ),
-            );
+            status.failed(&format!(
+                "Failed to determine the installed Java version from `{}`",
+                java_path
+            ));
             error
         })?;
 
